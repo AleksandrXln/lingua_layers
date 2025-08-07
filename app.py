@@ -1,4 +1,4 @@
-# app.py — Lingua Layers v2.5 (07-08-2025)
+# app.py — Lingua Layers v2.5.1 (08-08-2025)
 import os, json
 import streamlit as st
 import networkx as nx
@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 DATA, GRAPH = "data/layers.json", "graphs/latest.png"
 
 
-# ──────────── DB helpers ──────────────────────────────────────
+# ────── DB helpers ────────────────────────────────────
 def load_db():
     if not os.path.exists(DATA):
         os.makedirs("data", exist_ok=True)
@@ -28,7 +28,7 @@ def all_concepts(db):
             yield c
 
 
-# ──────────── GRAPH helper ───────────────────────────────────
+# ────── GRAPH helper ─────────────────────────────────
 def draw_subgraph(db, cid):
     G = nx.DiGraph()
     for c in all_concepts(db):
@@ -44,7 +44,7 @@ def draw_subgraph(db, cid):
                     G.add_edge(c2["id"], cid)
             break
 
-    if G.number_of_nodes() == 0:
+    if not G:
         if os.path.exists(GRAPH):
             os.remove(GRAPH)
         return
@@ -55,26 +55,23 @@ def draw_subgraph(db, cid):
     nx.draw(G, pos, node_color=colors, node_size=700, arrows=True,
             with_labels=False)
     nx.draw_networkx_labels(G, pos,
-                            nx.get_node_attributes(G, "label"),
-                            font_size=8)
+                            nx.get_node_attributes(G, "label"), font_size=8)
     plt.axis("off")
     os.makedirs("graphs", exist_ok=True)
     plt.savefig(GRAPH, dpi=140, bbox_inches="tight")
     plt.close()
 
 
-# ──────────── UI ──────────────────────────────────────────────
+# ────── UI ───────────────────────────────────────────
 st.set_page_config("Lingua Layers", layout="wide")
 db = load_db()
 
-# текущий выбор
 if "selected_id" not in st.session_state:
     first = next(all_concepts(db), None)
     st.session_state["selected_id"] = first["id"] if first else None
 sel_id = st.session_state["selected_id"]
 
-
-# ═══════ SIDEBAR: список терминов ═════════════════════════════
+# ═════ SIDEBAR — список терминов ═════════════════════
 st.sidebar.header("Термины")
 query = st.sidebar.text_input("Поиск")
 
@@ -94,7 +91,7 @@ for idx, (cid, title) in enumerate(concepts):
         )
 
     with col_txt:
-        if st.button(title, key=f"choose_{idx}_{cid}", use_container_width=True):
+        if st.button(title, key=f"choose_{idx}_{cid}"):
             st.session_state["selected_id"] = cid
             sel_id = cid
 
@@ -102,8 +99,7 @@ for idx, (cid, title) in enumerate(concepts):
         if st.button("🗑️", key=f"del_{idx}_{cid}", help="Удалить"):
             st.session_state["delete_request"] = cid
 
-
-# ═══════ ФОРМА: добавить слой ═════════════════════════════════
+# ═════ Добавить слой ═════════════════════════════════
 st.subheader("Добавить слой")
 with st.form("add_layer", border=True):
     l_alias = st.text_input("Alias слоя")
@@ -119,8 +115,7 @@ if ok_layer and l_alias:
     save_db(db)
     st.success(f"Слой {new_id} создан.")
 
-
-# ═══════ ФОРМА: добавить термин ═══════════════════════════════
+# ═════ Добавить термин ═══════════════════════════════
 st.subheader("Добавить термин")
 with st.form("add_term", border=True):
     layer_opts = [f"{l['id']} – {l['alias']}" for l in db["layers"]]
@@ -145,17 +140,14 @@ if ok_term and term and defi:
     sel_id = cid
     st.success(f"Добавлено {cid}")
 
-
-# ═══════ Удаление терминов ════════════════════════════════════
+# ═════ Удаление терминов ═════════════════════════════
 if "delete_request" in st.session_state:
     did = st.session_state.pop("delete_request")
     for layer in db["layers"]:
         before = len(layer["library"]["concepts"])
-        layer["library"]["concepts"] = [
-            c for c in layer["library"]["concepts"] if c["id"] != did
-        ]
+        layer["library"]["concepts"] = [c for c in layer["library"]["concepts"]
+                                        if c["id"] != did]
         if len(layer["library"]["concepts"]) < before:
-            # чистим ссылки
             for c in all_concepts(db):
                 if did in c.get("refs", []):
                     c["refs"].remove(did)
@@ -166,8 +158,7 @@ if "delete_request" in st.session_state:
             st.sidebar.success(f"Удалён {did}")
             break
 
-
-# ═══════ Граф выбранного термина ══════════════════════════════
+# ═════ Граф выбранного термина ═══════════════════════
 if sel_id:
     draw_subgraph(db, sel_id)
     if os.path.exists(GRAPH):
