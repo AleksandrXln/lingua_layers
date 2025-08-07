@@ -1,3 +1,9 @@
+import os, json
+import streamlit as st
+import networkx as nx
+import matplotlib.pyplot as plt
+
+
 # ===== САЙДБАР =================================================
 st.sidebar.header("Термины")
 search = st.sidebar.text_input("Поиск")
