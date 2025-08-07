@@ -1,4 +1,4 @@
-# app.py — Lingua Layers v2.4 (фильтр + ровная строка)
+# app.py — Lingua Layers v2.5 (07-08-2025)
 import os, json
 import streamlit as st
 import networkx as nx
@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 
 DATA, GRAPH = "data/layers.json", "graphs/latest.png"
 
-# ──────── DB ──────────────────────────────────────────
+
+# ──────────── DB helpers ──────────────────────────────────────
 def load_db():
     if not os.path.exists(DATA):
         os.makedirs("data", exist_ok=True)
@@ -15,16 +16,19 @@ def load_db():
                   indent=2, ensure_ascii=False)
     return json.load(open(DATA, encoding="utf-8"))
 
+
 def save_db(db):
     json.dump(db, open(DATA, "w", encoding="utf-8"),
               indent=2, ensure_ascii=False)
+
 
 def all_concepts(db):
     for layer in db["layers"]:
         for c in layer["library"]["concepts"]:
             yield c
 
-# ──────── GRAPH ───────────────────────────────────────
+
+# ──────────── GRAPH helper ───────────────────────────────────
 def draw_subgraph(db, cid):
     G = nx.DiGraph()
     for c in all_concepts(db):
@@ -39,121 +43,131 @@ def draw_subgraph(db, cid):
                     G.add_node(c2["id"], label=c2["term"], main=False)
                     G.add_edge(c2["id"], cid)
             break
-    if not G:                          # нет узлов
+
+    if G.number_of_nodes() == 0:
         if os.path.exists(GRAPH):
             os.remove(GRAPH)
         return
-    pos = nx.spring_layout(G, seed=42)
+
+    pos    = nx.spring_layout(G, seed=42)
     colors = ["#16a34a" if G.nodes[n]["main"] else "#60d394" for n in G]
     plt.figure(figsize=(7, 5))
     nx.draw(G, pos, node_color=colors, node_size=700, arrows=True,
             with_labels=False)
     nx.draw_networkx_labels(G, pos,
-                            nx.get_node_attributes(G, "label"), font_size=8)
-    plt.axis("off"); os.makedirs("graphs", exist_ok=True)
-    plt.tight_layout(); plt.savefig(GRAPH, dpi=140); plt.close()
+                            nx.get_node_attributes(G, "label"),
+                            font_size=8)
+    plt.axis("off")
+    os.makedirs("graphs", exist_ok=True)
+    plt.savefig(GRAPH, dpi=140, bbox_inches="tight")
+    plt.close()
 
-# ──────── UI ───────────────────────────────────────────
+
+# ──────────── UI ──────────────────────────────────────────────
 st.set_page_config("Lingua Layers", layout="wide")
 db = load_db()
 
+# текущий выбор
 if "selected_id" not in st.session_state:
     first = next(all_concepts(db), None)
     st.session_state["selected_id"] = first["id"] if first else None
 sel_id = st.session_state["selected_id"]
 
-# ----- SIDEBAR ---------------------------------------
+
+# ═══════ SIDEBAR: список терминов ═════════════════════════════
 st.sidebar.header("Термины")
 query = st.sidebar.text_input("Поиск")
 
 concepts = [(c["id"], c["term"]) for c in all_concepts(db)]
-filtered = [item for item in concepts if query.lower() in item[1].lower()]
+if query:
+    concepts = [c for c in concepts if query.lower() in c[1].lower()]
 
-# гарантируем, что выбранный термин остаётся видимым
-if sel_id and sel_id not in [c[0] for c in filtered]:
-    sel_concept = next((c for c in concepts if c[0] == sel_id), None)
-    if sel_concept:
-        filtered.insert(0, sel_concept)
+for idx, (cid, title) in enumerate(concepts):
+    sel = cid == sel_id
+    col_dot, col_txt, col_bin = st.sidebar.columns([1, 6, 1])
 
-for idx, (cid, title) in enumerate(filtered):
-    sel = (cid == sel_id)
-    line = (
-        f"<span style='font-size:18px;color:{'#16a34a' if sel else '#9ca3af'}'>●</span> "
-        f"<button style='border:none;background:none;color:#111;font-size:15px;"
-        f"text-align:left;cursor:pointer;' "
-        f"onclick=\"window.parent.postMessage({{'type':'select','id':'{cid}'}},'*');\">"
-        f"{title}</button> "
-        f"<button style='border:none;background:none;cursor:pointer;color:#e11d48;' "
-        f"onclick=\"window.parent.postMessage({{'type':'del','id':'{cid}'}},'*');\">🗑️</button>"
-    )
-    st.sidebar.markdown(line, unsafe_allow_html=True)
+    with col_dot:
+        st.markdown(
+            f"<div style='font-size:18px;text-align:center;"
+            f"color:{'#16a34a' if sel else '#9ca3af'}'>●</div>",
+            unsafe_allow_html=True
+        )
 
-# JS-bridge: ловим клики из html-кнопок
-components = st.components.v1
-components.html("""
-<script>
-window.addEventListener("message", (ev)=>{
-  const d = ev.data;
-  if(d.type==="select"){parent.postMessage(d,"*")}
-  if(d.type==="del"){parent.postMessage(d,"*")}
-});
-</script>""", height=0)
+    with col_txt:
+        if st.button(title, key=f"choose_{idx}_{cid}", use_container_width=True):
+            st.session_state["selected_id"] = cid
+            sel_id = cid
 
-# сообщения от iFrame -> Streamlit
-evt = st.experimental_get_query_params().get("streamlit_message")
-if evt:
-    import json, urllib.parse
-    msg = json.loads(urllib.parse.unquote(evt[0]))
-    if msg["type"] == "select":
-        st.session_state["selected_id"] = msg["id"]
-        sel_id = msg["id"]
-    elif msg["type"] == "del":
-        st.session_state["delete_request"] = msg["id"]
+    with col_bin:
+        if st.button("🗑️", key=f"del_{idx}_{cid}", help="Удалить"):
+            st.session_state["delete_request"] = cid
 
-# ----- FORM: добавить термин --------------------------
-st.title("Lingua Layers Editor")
-with st.form("add"):
-    lopts = [f"{l['id']} – {l['alias']}" for l in db["layers"]]
-    lsel  = st.selectbox("Слой", lopts + ["<Создать новый>"])
-    if lsel == "<Создать новый>":
-        nalias = st.text_input("Alias слоя")
-        nlevel = st.number_input("Уровень", 1, 99, 1)
-        ndesc  = st.text_area("Описание слоя")
-    term = st.text_input("Термин")
-    defi = st.text_area("Определение")
-    ok   = st.form_submit_button("Сохранить")
 
-if ok and term and defi:
-    if lsel == "<Создать новый>":
-        lid = str(len(db["layers"]) + 1)
-        db["layers"].append({"id": lid, "alias": nalias, "level": int(nlevel),
-                             "description": ndesc,
-                             "library": {"concepts": []}})
+# ═══════ ФОРМА: добавить слой ═════════════════════════════════
+st.subheader("Добавить слой")
+with st.form("add_layer", border=True):
+    l_alias = st.text_input("Alias слоя")
+    l_level = st.number_input("Уровень", 1, 99, 1)
+    l_desc  = st.text_area("Описание")
+    ok_layer = st.form_submit_button("Создать слой")
+
+if ok_layer and l_alias:
+    new_id = str(len(db["layers"]) + 1)
+    db["layers"].append({"id": new_id, "alias": l_alias,
+                         "level": int(l_level), "description": l_desc,
+                         "library": {"concepts": []}})
+    save_db(db)
+    st.success(f"Слой {new_id} создан.")
+
+
+# ═══════ ФОРМА: добавить термин ═══════════════════════════════
+st.subheader("Добавить термин")
+with st.form("add_term", border=True):
+    layer_opts = [f"{l['id']} – {l['alias']}" for l in db["layers"]]
+    if layer_opts:
+        l_sel = st.selectbox("Слой", layer_opts)
+        term  = st.text_input("Термин")
+        defi  = st.text_area("Определение")
+        ok_term = st.form_submit_button("Сохранить")
     else:
-        lid = lsel.split(" –")[0]
+        st.info("Сначала создайте слой")
+        ok_term = False
+
+if ok_term and term and defi:
+    lid   = l_sel.split(" –")[0]
     layer = next(l for l in db["layers"] if l["id"] == lid)
-    cid = f"{lid}.{len(layer['library']['concepts']) + 1}"
+    cid   = f"{lid}.{len(layer['library']['concepts']) + 1}"
     layer["library"]["concepts"].append(
         {"id": cid, "term": term, "definition": defi, "refs": []}
     )
-    save_db(db); st.session_state["selected_id"] = cid; sel_id = cid
+    save_db(db)
+    st.session_state["selected_id"] = cid
+    sel_id = cid
     st.success(f"Добавлено {cid}")
 
-# ----- Удаление ---------------------------------------
+
+# ═══════ Удаление терминов ════════════════════════════════════
 if "delete_request" in st.session_state:
     did = st.session_state.pop("delete_request")
     for layer in db["layers"]:
-        layer["library"]["concepts"] = [c for c in layer["library"]["concepts"]
-                                        if c["id"] != did]
-        for c in layer["library"]["concepts"]:
-            if did in c.get("refs", []): c["refs"].remove(did)
-    save_db(db)
-    if sel_id == did:
-        st.session_state["selected_id"] = None
-        sel_id = None
-    st.sidebar.success(f"Удалён {did}")
+        before = len(layer["library"]["concepts"])
+        layer["library"]["concepts"] = [
+            c for c in layer["library"]["concepts"] if c["id"] != did
+        ]
+        if len(layer["library"]["concepts"]) < before:
+            # чистим ссылки
+            for c in all_concepts(db):
+                if did in c.get("refs", []):
+                    c["refs"].remove(did)
+            save_db(db)
+            if sel_id == did:
+                st.session_state["selected_id"] = None
+                sel_id = None
+            st.sidebar.success(f"Удалён {did}")
+            break
 
-# ----- ГРАФ -------------------------------------------
+
+# ═══════ Граф выбранного термина ══════════════════════════════
 if sel_id:
     draw_subgraph(db, sel_id)
     if os.path.exists(GRAPH):
