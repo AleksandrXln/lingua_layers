@@ -1,21 +1,12 @@
-# app.py — Lingua Layers v2.1
-# Совместим с Python 3.7 и версиями пакетов:
-#   streamlit 1.17   pandas 1.3.5  matplotlib 3.4.3
-#   networkx 2.6.3   pyarrow 8.0.0  altair 4.2.2
-# ---------------------------------------------------------------
-
-import os
-import json
-import streamlit as st
+# app.py — Lingua Layers v2.2 (без radio-ошибки)
+import os, json, streamlit as st
 import networkx as nx
 import matplotlib.pyplot as plt
-
 
 DATA  = "data/layers.json"
 GRAPH = "graphs/latest.png"
 
-
-# ──────────────────────── БАЗА ДАННЫХ ──────────────────────────
+# ───────────────── DB helpers ─────────────────
 def load_db():
     if not os.path.exists(DATA):
         os.makedirs("data", exist_ok=True)
@@ -24,24 +15,18 @@ def load_db():
                   indent=2, ensure_ascii=False)
     return json.load(open(DATA, encoding="utf-8"))
 
-
 def save_db(db):
     json.dump(db, open(DATA, "w", encoding="utf-8"),
               indent=2, ensure_ascii=False)
-
 
 def all_concepts(db):
     for layer in db["layers"]:
         for c in layer["library"]["concepts"]:
             yield c
 
-
-# ──────────────────────── РИСОВАНИЕ ГРАФА ──────────────────────
-def draw_subgraph(db, concept_id: str):
-    """Рисует граф выбранного термина + все его входящие/исходящие связи."""
+# ───────────────── Graph helper ───────────────
+def draw_subgraph(db, concept_id):
     G = nx.DiGraph()
-
-    # находим узел и связи
     for c in all_concepts(db):
         if c["id"] == concept_id:
             G.add_node(c["id"], label=c["term"], main=True)
@@ -57,14 +42,13 @@ def draw_subgraph(db, concept_id: str):
                     G.add_edge(c2["id"], concept_id)
             break
 
-    if G.number_of_nodes() == 0:              # нечего рисовать
+    if G.number_of_nodes() == 0:
         if os.path.exists(GRAPH):
             os.remove(GRAPH)
         return
 
     pos    = nx.spring_layout(G, seed=42)
-    colors = ["#1976d2" if G.nodes[n]["main"] else "#42a5f5" for n in G]
-
+    colors = ["#16a34a" if G.nodes[n]["main"] else "#60d394" for n in G]
     plt.figure(figsize=(7, 5))
     nx.draw(G, pos, node_color=colors, with_labels=False,
             node_size=700, arrows=True)
@@ -76,12 +60,15 @@ def draw_subgraph(db, concept_id: str):
     plt.savefig(GRAPH, dpi=140, bbox_inches="tight")
     plt.close()
 
-
-# ─────────────────────── UI / STREAMLIT ────────────────────────
+# ───────────────── Streamlit UI ───────────────
 st.set_page_config("Lingua Layers", layout="wide")
 db = load_db()
 
-# ===== Сайдбар: поиск, выбор, удаление =========================
+# сохраняем выбранный id между рендерами
+if "selected_id" not in st.session_state:
+    first = next(all_concepts(db), None)
+    st.session_state["selected_id"] = first["id"] if first else None
+
 st.sidebar.header("Термины")
 search = st.sidebar.text_input("Поиск")
 
@@ -89,98 +76,84 @@ concepts = [(c["id"], c["term"]) for c in all_concepts(db)]
 if search:
     concepts = [c for c in concepts if search.lower() in c[1].lower()]
 
-# храним выбранный термин между рендерами
-if "selected_id" not in st.session_state and concepts:
-    st.session_state["selected_id"] = concepts[0][0]
-
-# выводим список
 for cid, title in concepts:
-    col_rad, col_txt, col_bin = st.sidebar.columns([1, 7, 1])
+    sel = (st.session_state["selected_id"] == cid)
+    dot = "●" if sel else "○"
+    col_dot, col_lbl, col_del = st.sidebar.columns([1, 7, 1])
 
-    # радиокнопка
-    with col_rad:
-        if st.radio("", [cid],
-                    key=f"radio_{cid}",
-                    index=0 if st.session_state.get("selected_id") == cid else -1):
-            st.session_state["selected_id"] = cid
+    # индикатор
+    with col_dot:
+        st.markdown(f"<span style='font-size:18px;'>{dot}</span>",
+                    unsafe_allow_html=True)
 
-    # кликабельный текст
-    with col_txt:
-        if st.button(title, key=f"text_{cid}", help="Выбрать термин"):
+    # название (кнопка-выбор)
+    with col_lbl:
+        if st.button(title, key=f"choose_{cid}"):
             st.session_state["selected_id"] = cid
 
     # корзина
-    with col_bin:
+    with col_del:
         if st.button("🗑️", key=f"del_{cid}", help="Удалить термин"):
             st.session_state["delete_request"] = cid
 
 selected_id = st.session_state.get("selected_id")
 
-# ===== Форма добавления термина ================================
+# ── форма добавления ──────────────────────────
 st.title("Lingua Layers Editor")
-
-with st.form("add_term"):
+with st.form("add"):
     layer_opts = [f"{l['id']} – {l['alias']}" for l in db["layers"]]
-    layer_sel  = st.selectbox("Слой", layer_opts + ["<Создать новый>"])
+    lay_sel = st.selectbox("Слой", layer_opts + ["<Создать новый>"])
 
-    if layer_sel == "<Создать новый>":
+    if lay_sel == "<Создать новый>":
         new_alias = st.text_input("Alias слоя")
         new_level = st.number_input("Уровень", 1, 99, 1)
         new_desc  = st.text_area("Описание слоя")
 
-    term       = st.text_input("Термин")
-    definition = st.text_area("Определение")
-    submitted  = st.form_submit_button("Сохранить")
+    term = st.text_input("Термин")
+    defi = st.text_area("Определение")
+    ok   = st.form_submit_button("Сохранить")
 
-# ---------- сохранение ----------------------------------------
-if submitted and term and definition:
-    if layer_sel == "<Создать новый>":
+if ok and term and defi:
+    if lay_sel == "<Создать новый>":
         lid   = str(len(db["layers"]) + 1)
-        layer = {"id": lid,
-                 "alias": new_alias,
-                 "level": int(new_level),
+        layer = {"id": lid, "alias": new_alias, "level": int(new_level),
                  "description": new_desc,
                  "library": {"concepts": []}}
         db["layers"].append(layer)
     else:
-        lid   = layer_sel.split(" –")[0]
+        lid   = lay_sel.split(" –")[0]
         layer = next(l for l in db["layers"] if l["id"] == lid)
 
     cid = f"{layer['id']}.{len(layer['library']['concepts']) + 1}"
-
-    # ─── тут подключите ИИ, чтобы получить refs ───
-    refs = []
-
-    layer["library"]["concepts"].append({
-        "id": cid, "term": term, "definition": definition, "refs": refs
-    })
+    refs = []                               # ← подключите ИИ здесь
+    layer["library"]["concepts"].append({"id": cid,
+                                         "term": term,
+                                         "definition": defi,
+                                         "refs": refs})
     save_db(db)
-    st.success(f"Добавлено {cid}")
     st.session_state["selected_id"] = cid
+    st.success(f"Добавлено {cid}")
     selected_id = cid
 
-# ---------- удаление ------------------------------------------
+# ── удаление ──────────────────────────────────
 if "delete_request" in st.session_state:
     del_id = st.session_state.pop("delete_request")
-
     for layer in db["layers"]:
-        before = len(layer["library"]["concepts"])
-        layer["library"]["concepts"] = [
-            c for c in layer["library"]["concepts"] if c["id"] != del_id
-        ]
-        if len(layer["library"]["concepts"]) < before:
-            # чистим ссылки на удалённый узел
+        orig = len(layer["library"]["concepts"])
+        layer["library"]["concepts"] = [c for c in layer["library"]["concepts"]
+                                        if c["id"] != del_id]
+        if len(layer["library"]["concepts"]) < orig:
             for c in all_concepts(db):
                 if del_id in c.get("refs", []):
                     c["refs"].remove(del_id)
             save_db(db)
-            st.sidebar.success(f"Удалён {del_id}")
-            if st.session_state.get("selected_id") == del_id:
-                st.session_state["selected_id"] = None
+            st.success(f"Удалён {del_id}")
+            if selected_id == del_id:
                 selected_id = None
+                st.session_state["selected_id"] = None
             break
 
-# ===== Граф выбранного термина =================================
+# ── вывод графа ───────────────────────────────
 if selected_id:
     draw_subgraph(db, selected_id)
     if os.path.exists(GRAPH):
